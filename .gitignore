@@ -1,0 +1,24 @@
+# STM32CubeIDE Build Folders
+Debug/
+Release/
+
+# Compiled Object and Dependency files
+*.o
+*.su
+*.d
+
+# Executables, Binaries, and Memory Maps
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+
+# preferences 
+.mxproject 
+*.launch 
+.settings/
