@@ -75,7 +75,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Src/non-block-blinky.c|Src/schedule_v3.c|Src/main_schedule_v3.c|Src/lesson23version2.0.c|Src/lesson22.c|Src/myvector.c|Src/lesson16.c|Src/lesson6.c|Src/lesson5.c|Src/lesson4.c|Src/lesson3.c|Src/main1.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
+						<entry excluding="Src/non-block-blinky.c|Src/schedule_v3.c|Src/main_schedule_v3.c|Src/lesson22.c|Src/myvector.c|Src/lesson16.c|Src/lesson6.c|Src/lesson5.c|Src/lesson4.c|Src/lesson3.c|Src/main1.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>
@@ -152,7 +152,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Src/non-block-blinky.c|Src/schedule_v3.c|Src/main_schedule_v3.c|Src/lesson23version2.0.c|Src/lesson22.c|Src/myvector.c|Src/lesson16.c|Src/lesson6.c|Src/lesson5.c|Src/lesson4.c|Src/lesson3.c|Src/main1.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
+						<entry excluding="Src/non-block-blinky.c|Src/schedule_v3.c|Src/main_schedule_v3.c|Src/lesson22.c|Src/myvector.c|Src/lesson16.c|Src/lesson6.c|Src/lesson5.c|Src/lesson4.c|Src/lesson3.c|Src/main1.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>

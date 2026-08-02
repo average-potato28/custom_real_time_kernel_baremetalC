@@ -4,17 +4,17 @@
 #include "cmsis_compiler.h"
 #include "stm32f4xx.h"
 
-int i = 0;
-int mx_thread;
-int exc_add[2];
-int arr1[40];
-int arr2[40];
+int i = 1;
+
+int exc_add[mx_thread];
+int arr0[60];
+int arr1[60];
 
 void fake_stack(int *ptr);
 
 __attribute__((naked)) void fake_stack(int *ptr)
 {
-    __set_MSP((uint32_t)&arr1[40]);
+    __set_MSP((uint32_t)&arr1[60]);
     __asm volatile (
         "mov r0, 0x01000000 \n"
         "push {r0}          \n"
@@ -40,19 +40,17 @@ int main(void)
 
     SysTick->LOAD = (SystemCoreClock / 100U) - 1U;
     SysTick->VAL  = 0U;
-    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
-                    SysTick_CTRL_TICKINT_Msk   |
-                    SysTick_CTRL_ENABLE_Msk;
+    SysTick->CTRL = 7 ;
 
     __disable_irq();
-    fake_stack((int *)&blinken);
+    fake_stack((int *)&blinkoff);
+    exc_add[i] = (uint32_t)&arr1[44];
+i=0;
+    __set_MSP((int)&arr0[60]);
+
     __enable_irq();
 
-    __set_MSP((int)&arr2[40]);
-    exc_add[i] = (uint32_t)&arr1[32];
-    mx_thread = 2;
-
-    blinkoff();
+    blinken();
 
     while (1) {
     }
