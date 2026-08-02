@@ -31,28 +31,27 @@ Once the `SysTick` timer fires (100 Hz), the hardware and assembly scheduler aut
 
 ```mermaid
 graph TD
-    subgraph SysTick_Handler (Naked Assembly)
-        ST_Entry[SysTick Interrupt Fires] --> PushSW[1. push {r4-r11}]
-        PushSW --> CallCS[2. bl context_switch]
-        CallCS --> PopSW[5. pop {r4-r11}]
-        PopSW --> Ret[6. bx lr - 0xFFFFFFF9]
+    subgraph SG1 ["SysTick_Handler Assembly"]
+        ST_Entry["SysTick Interrupt Fires"] --> PushSW["1. push {r4-r11}"]
+        PushSW --> CallCS["2. bl context_switch"]
+        CallCS --> PopSW["5. pop {r4-r11}"]
+        PopSW --> Ret["6. bx lr - 0xFFFFFFF9"]
     end
 
-    subgraph context_switch() (C Function)
-        CallCS --> SaveMSP[3. exc_add[i] = __get_MSP()]
-        SaveMSP --> NextIdx[Update Index: i = (i + 1) % 2]
-        NextIdx --> LoadMSP[4. __set_MSP(exc_add[i])]
+    subgraph SG2 ["context_switch C Function"]
+        CallCS --> SaveMSP["3. exc_add[i] = __get_MSP()"]
+        SaveMSP --> NextIdx["Update Index: i = (i + 1) % 2"]
+        NextIdx --> LoadMSP["4. __set_MSP(exc_add[i])"]
     end
 
-    subgraph Task Stack Memory (16-Word Saved Context)
-        T0[Thread 0 Stack: arr0]
-        T1[Thread 1 Stack: arr1]
+    subgraph SG3 ["Task Stack Memory - 16-Word Context"]
+        T0["Thread 0 Stack: arr0"]
+        T1["Thread 1 Stack: arr1"]
         
         LoadMSP -->|i = 0| T0
         LoadMSP -->|i = 1| T1
     end
 ```
-
 ---
 
 ## Features
