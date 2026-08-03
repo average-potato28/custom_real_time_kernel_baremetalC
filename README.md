@@ -69,19 +69,21 @@ While Version 1 successfully switches context without crashing, it contains four
 
 ### 1. Swapping Stack Pointers Inside a Normal C Function
 Executing `__set_MSP()` inside `context_switch()` is compiler-dependent. If compiler optimization (`-O2` / `-O3`) pushes registers onto the stack at the start of `context_switch()`, changing `MSP` mid-function causes `context_switch()` to pop values off the **new thread's stack** upon return, risking memory corruption.
-* *Fix for V2*: Perform the stack pointer swap entirely in pure Assembly or inside `PendSV_Handler`.
+
 
 ### 2. Uninitialized Software Frame ($R4–R11$) & Garbage $LR$
 Setting `exc_add[1] = &arr1[44]` leaves indices `44–51` ($R4–R11$) and index `57` ($LR$) populated with raw RAM garbage on the first context switch. If Thread 1 ever exits its `while(1)` loop, $LR$ contains a random address, triggering a HardFault.
-* *Fix for V2*: Programmatically initialize $R4–R11$ to zero and set $LR = 0xFFFFFFF9$ during initial stack setup.
+
 
 ### 3. Hardcoded Stack Offset (`&arr1[44]`)
 Assigning `exc_add[1] = (uint32_t)&arr1[44]` relies on manual hardcoded index math (`60 - 16 = 44`). If stack sizes change or floating-point registers are added later, hardcoded indices break easily.
-* *Fix for V2*: Create a programmatic stack initialization function using a struct or stack pointer decrement loop.
 
 ### 4. Lack of Process Stack Pointer (PSP) Task Isolation
 Both tasks and interrupt handlers run on the Main Stack Pointer (`MSP`). If a task stack overflows, it directly corrupts the kernel exception stack.
-* *Fix for V2*: Move user tasks to the Process Stack Pointer (`PSP`) and keep `MSP` reserved strictly for kernel exception handlers.
+
+
+
+
 # Minimal RTOS Kernel — Version 0 (Proof of Concept)
 
 Version 0 is the absolute bare-minimum proof-of-concept to get context switching working on an ARM Cortex-M4 (STM32F4). 
