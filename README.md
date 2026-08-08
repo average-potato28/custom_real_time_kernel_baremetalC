@@ -1,8 +1,35 @@
-# Bare-Metal STM32F4 Cortex-M4 Round-Robin Scheduler (v2)
 
-A custom, bare-metal preemptive round-robin task scheduler built for ARM Cortex-M4 (STM32F4) microcontrollers. The system uses the Cortex-M SysTick timer to perform context switching across multiple independent tasks.
+
+# Bare-Metal STM32F4 Cortex-M4 Preemptive Scheduler Engine
+
+A custom, bare-metal preemptive round-robin task scheduler designed for ARM Cortex-M4 (STM32F4) microcontrollers. This repository documents the step-by-step evolutionary development of the kernel across three major versions—from a proof-of-concept hardware exception switcher (v0) to a full 5-thread assembly context-switching engine (v2).
 
 ---
+
+## Table of Contents
+
+- [Version 2 — Multi-Thread Assembly Kernel (Current)](#version-2--multi-thread-assembly-kernel-current)
+  - [Architecture Overview](#architecture-overview)
+  - [Thread Specifications](#thread-specifications)
+  - [Detailed Architectural Upgrades over V1](#detailed-architectural-upgrades-over-v1)
+  - [Architecture Diagrams](#architecture-diagrams)
+  - [Project File Structure](#project-file-structure)
+  - [Known Bugs & Design Issues](#known-bugs--design-issues)
+- [Version 1.0 — Minimal RTOS Kernel](#version-10--minimal-rtos-kernel-full-context-preservation)
+  - [How It Works](#how-it-works)
+  - [Architecture Diagram](#architecture-diagram)
+  - [Features](#features)
+  - [Bugs & Architectural Issues](#bugs--architectural-issues-targets-for-version-2)
+- [Version 0 — Proof of Concept](#version-0--minimal-rtos-kernel-proof-of-concept)
+  - [How It Works](#how-it-works-1)
+  - [Architecture](#architecture)
+  - [The 5 Biggest Bugs & Architectural Problems](#the-5-biggest-bugs--architectural-problems)
+
+---
+
+# Version 2 — Multi-Thread Assembly Kernel (Current)
+
+Version 2 is a custom, bare-metal preemptive round-robin task scheduler built for ARM Cortex-M4 (STM32F4) microcontrollers. The system uses the Cortex-M SysTick timer to perform context switching across multiple independent tasks.
 
 ## Architecture Overview
 
@@ -13,56 +40,9 @@ The system manages 5 statically allocated threads executing in a round-robin cyc
 - **Time Slice**: 10 ms per thread (SysTick running at 100 Hz)
 - **Context Preservation**: Hardware auto-stacking combined with manual software register saving (`R4–R11`)
 
-
-
-## Detailed Architectural Upgrades
-
-### 1. Pure Assembly Context Switcher
-
-#### Version 1 (Hybrid Approach)
-In `v1`, `SysTick_Handler` pushed software registers (`r4-r11`) in assembly, then performed a branch link (`bl context_switch`) to call a C function. 
-
-* **Drawback**: Calling a C function inside an interrupt handler forces the compiler to insert procedure call overhead, altering stack offsets and risking register corruption.
-
-#### Version 2 (Pure Assembly)
-In `v2`, the C function `context_switch` was completely eliminated. The MSP pointer read/write (`mrs`/`msr`), task index arithmetic (`add`, `cmp`, `it eq`), and array indexing (`lsl #2`) are handled entirely in assembly within `SysTick_Handler`.
-
 ---
 
-### 2. Stack Synthesis & Elimination of Magic Offsets
-
-#### Version 1 (Manual Stack Frame)
-`v1` only pushed `xPSR` and `PC` in `fake_stack()`. To account for the rest of the un-pushed registers (`r0–r3`, `r12`, `LR`, `r4–r11`), `main()` manually assigned the stack pointer using a hardcoded index:
-- `exc_add[i] = (uint32_t)&arr1[44];` (Manually offset by 16 words / 64 bytes).
-
-#### Version 2 (Automated Frame Construction)
-`v2` expanded `fake_stack()` to push a complete fake context frame:
-1. Hardware Frame: `xPSR`, `PC`, `LR`, `R12`, `R3`, `R2`, `R1`, `R0`
-2. Software Frame: `R11`, `R10`, `R9`, `R8`, `R7`, `R6`, `R5`, `R4`
-
-The initial stack address is then saved automatically using `__get_MSP()`, completely removing the need for hardcoded index math.
-
----
-
-### 3. SysTick Priority Management (`SCB->SHP`)
-
-In **Version 2**, the following line was added to `v2main.c`:
-
-```c
-SCB->SHP[11] = 0xFF; // Set SysTick priority to lowest level (0xFF)
-```
-
-- **Why this matters**: In Cortex-M RTOS design, the scheduler interrupt (SysTick / PendSV) **must** run at the lowest priority so that hardware interrupts (such as UART, SPI, or Timers) are never delayed by a context switch.
-
----
-
-### 4. Telemetry and I/O Expansion
-
-- **Version 1**: The application only blinked an LED via bit-banding (`blinken` vs `blinkoff`).
-- **Version 2**: Integrated USART1 serial communication. Each of the 5 threads transmits its status over serial (`b0\r\n`, `g0\r\n`, `r0\r\n`, `y0\r\n`, `w0\r\n`), providing real-time visibility into scheduler behavior.
-
-
-### Thread Specifications
+## Thread Specifications
 
 | Thread ID | Entry Function | Memory Stack | Action |
 | :--- | :--- | :--- | :--- |
@@ -71,6 +51,36 @@ SCB->SHP[11] = 0xFF; // Set SysTick priority to lowest level (0xFF)
 | **2** | `red()` | `mem_alloc[2]` | Sends UART message |
 | **3** | `yellow()` | `mem_alloc[3]` | Sends UART message |
 | **4** | `white()` | `mem_alloc[4]` | Sets LED alias state and sends UART message |
+
+---
+
+## Detailed Architectural Upgrades over V1
+
+### 1. Pure Assembly Context Switcher
+* **Version 1 (Hybrid Approach)**: `SysTick_Handler` pushed software registers (`r4-r11`) in assembly, then performed a branch link (`bl context_switch`) to call a C function. 
+  * *Drawback*: Calling a C function inside an interrupt handler forces the compiler to insert procedure call overhead, altering stack offsets and risking register corruption.
+* **Version 2 (Pure Assembly)**: The C function `context_switch` was completely eliminated. The MSP pointer read/write (`mrs`/`msr`), task index arithmetic (`add`, `cmp`, `it eq`), and array indexing (`lsl #2`) are handled entirely in assembly within `SysTick_Handler`.
+
+### 2. Stack Synthesis & Elimination of Magic Offsets
+* **Version 1 (Manual Stack Frame)**: `v1` only pushed `xPSR` and `PC` in `fake_stack()`. To account for the un-pushed registers (`r0–r3`, `r12`, `LR`, `r4–r11`), `main()` manually assigned the stack pointer using a hardcoded index:
+  * `exc_add[i] = (uint32_t)&arr1[44];` (Manually offset by 16 words / 64 bytes).
+* **Version 2 (Automated Frame Construction)**: `v2` expanded `fake_stack()` to push a complete fake context frame:
+  1. **Hardware Frame**: `xPSR`, `PC`, `LR`, `R12`, `R3`, `R2`, `R1`, `R0`
+  2. **Software Frame**: `R11`, `R10`, `R9`, `R8`, `R7`, `R6`, `R5`, `R4`
+
+The initial stack address is then saved automatically using `__get_MSP()`, completely removing the need for hardcoded index math.
+
+### 3. SysTick Priority Management (`SCB->SHP`)
+In Version 2, the following configuration was added to `v2main.c`:
+
+```c
+SCB->SHP[11] = 0xFF; // Set SysTick priority to lowest level (0xFF)
+```
+* **Why this matters**: In Cortex-M RTOS design, the scheduler interrupt (SysTick / PendSV) **must** run at the lowest priority so that hardware interrupts (such as UART, SPI, or Timers) are never delayed by a context switch.
+
+### 4. Telemetry and I/O Expansion
+* **Version 1**: The application only blinked an LED via bit-banding (`blinken` vs `blinkoff`).
+* **Version 2**: Integrated USART1 serial communication. Each of the 5 threads transmits its status over serial (`b0\r\n`, `g0\r\n`, `r0\r\n`, `y0\r\n`, `w0\r\n`), providing real-time visibility into scheduler behavior.
 
 ---
 
@@ -101,7 +111,11 @@ classDiagram
         -0x1C : R5  (Software Saved)
         -0x20 : R4  (Software Saved / Top of Stack)
     }
+```
 
+### 2. Preemptive Scheduling Sequence
+
+```mermaid
 sequenceDiagram
     autonumber
     participant HW as Hardware / SysTick
@@ -120,37 +134,36 @@ sequenceDiagram
     Handler->>HW: Return from Exception
     Note over Handler, TaskB: Hardware pops R0-R3, R12, LR, PC, xPSR
     HW->>TaskB: Resume execution
-
-
-
-Project Structure
-delay.h: Global definitions, array allocations, thread count limits, and function prototypes.
-delay.c: Software busy-wait delay implementation.
-v2.c: SysTick interrupt handler and individual task routines (blue, green, red, yellow, white).
-v2main.c: System initialization, clock configuration, task stack synthesis function, and application main entry point.
-
-
-Known Bugs and Design Issues
-
-Register Corruption during Initialization: The stack setup process overwrites the register storing the task function address before saving it to the stack, leading to execution crashes.
-
-Missing Return Instructions in Naked Functions: The function synthesizing initial thread stacks is declared as naked but lacks assembly return instructions, causing memory fall-through after execution.
-
-Stack Alignment Violation: Stack pointer calculations result in 4-byte alignment rather than the mandatory 8-byte alignment required by ARM Procedure Call Standards.
-
-Shared MSP Memory Architecture: User tasks execute using the Main Stack Pointer rather than the dedicated Process Stack Pointer, mixing kernel interrupt stack memory with task execution stack memory.
-
-Inadequate Stack Memory Sizing: The allocated task stack array size is too small, creating a high risk of stack overflow when calling HAL driver functions.
-
-Hardcoded Floating Point Exception Returns: The exception return mask hardcodes execution back to standard thread mode using MSP, breaking compatibility if Floating Point hardware extensions are enabled.
-
-Interrupt Disabling during I/O Operations: Temporarily turning off global interrupts during UART transmission freezes the SysTick timer and halts real-time task switching.
-
-Uncalibrated Timing Loop: The software delay function relies on arbitrary loop counts that do not accurately represent real-time millisecond durations.
+```
 
 ---
 
-# Minimal RTOS Kernel — Version 1.0 (Full Context Preservation)
+## Project File Structure
+
+```text
+.
+├── delay.h       # Global definitions, array allocations, thread count limits, and function prototypes
+├── delay.c       # Software busy-wait delay implementation
+├── v2.c          # SysTick interrupt handler and individual task routines (blue, green, red, yellow, white)
+└── v2main.c      # System initialization, clock configuration, task stack synthesis function, and main entry
+```
+
+---
+
+## Known Bugs and Design Issues
+
+- **Register Corruption during Initialization**: The stack setup process overwrites the register storing the task function address before saving it to the stack, leading to execution crashes.
+- **Missing Return Instructions in Naked Functions**: The function synthesizing initial thread stacks is declared as naked but lacks assembly return instructions, causing memory fall-through after execution.
+- **Stack Alignment Violation**: Stack pointer calculations result in 4-byte alignment rather than the mandatory 8-byte alignment required by ARM Procedure Call Standards.
+- **Shared MSP Memory Architecture**: User tasks execute using the Main Stack Pointer rather than the dedicated Process Stack Pointer, mixing kernel interrupt stack memory with task execution stack memory.
+- **Inadequate Stack Memory Sizing**: The allocated task stack array size is too small, creating a high risk of stack overflow when calling HAL driver functions.
+- **Hardcoded Floating Point Exception Returns**: The exception return mask hardcodes execution back to standard thread mode using MSP, breaking compatibility if Floating Point hardware extensions are enabled.
+- **Interrupt Disabling during I/O Operations**: Temporarily turning off global interrupts during UART transmission freezes the SysTick timer and halts real-time task switching.
+- **Uncalibrated Timing Loop**: The software delay function relies on arbitrary loop counts that do not accurately represent real-time millisecond durations.
+
+---
+
+# Version 1.0 — Minimal RTOS Kernel (Full Context Preservation)
 
 Version 1.0 upgrades the Version 0 proof-of-concept into a functional 2-thread preemptive time-slicing scheduler. It introduces full callee-saved register ($R4–R11$) context preservation and isolates thread execution onto dedicated RAM stack arrays (`arr0` and `arr1`).
 
@@ -202,6 +215,7 @@ graph TD
         LoadMSP -->|i = 1| T1
     end
 ```
+
 ---
 
 ## Features
@@ -215,15 +229,11 @@ graph TD
 
 ## Bugs & Architectural Issues (Targets for Version 2)
 
-While Version 1 successfully switches context without crashing, it contains four architectural limitations that need to be addressed in Version 2:
-
 ### 1. Swapping Stack Pointers Inside a Normal C Function
 Executing `__set_MSP()` inside `context_switch()` is compiler-dependent. If compiler optimization (`-O2` / `-O3`) pushes registers onto the stack at the start of `context_switch()`, changing `MSP` mid-function causes `context_switch()` to pop values off the **new thread's stack** upon return, risking memory corruption.
 
-
 ### 2. Uninitialized Software Frame ($R4–R11$) & Garbage $LR$
 Setting `exc_add[1] = &arr1[44]` leaves indices `44–51` ($R4–R11$) and index `57` ($LR$) populated with raw RAM garbage on the first context switch. If Thread 1 ever exits its `while(1)` loop, $LR$ contains a random address, triggering a HardFault.
-
 
 ### 3. Hardcoded Stack Offset (`&arr1[44]`)
 Assigning `exc_add[1] = (uint32_t)&arr1[44]` relies on manual hardcoded index math (`60 - 16 = 44`). If stack sizes change or floating-point registers are added later, hardcoded indices break easily.
@@ -231,10 +241,9 @@ Assigning `exc_add[1] = (uint32_t)&arr1[44]` relies on manual hardcoded index ma
 ### 4. Lack of Process Stack Pointer (PSP) Task Isolation
 Both tasks and interrupt handlers run on the Main Stack Pointer (`MSP`). If a task stack overflows, it directly corrupts the kernel exception stack.
 
+---
 
-
-
-# Minimal RTOS Kernel — Version 0 (Proof of Concept)
+# Version 0 — Minimal RTOS Kernel (Proof of Concept)
 
 Version 0 is the absolute bare-minimum proof-of-concept to get context switching working on an ARM Cortex-M4 (STM32F4). 
 
@@ -268,8 +277,6 @@ The goal here wasn't to write a production-ready scheduler, but to understand ho
 ---
 
 ## The 5 Biggest Bugs & Architectural Problems
-
-While the LED blinks, Version 0 has severe architectural flaws that make it unusable for real applications. These are the main issues identified for future versions:
 
 ### 1. Missing Callee-Saved Register Handling ($R4–R11$)
 The hardware exception entry automatically saves $R0–R3, R12, LR, PC,$ and $xPSR$. However, Version 0 **completely ignores $R4–R11$**. If local variables or loops inside `delay()` assign values to $R4–R11$, those registers get overwritten during a context switch, causing subtle data corruption when returning to the previous task.
