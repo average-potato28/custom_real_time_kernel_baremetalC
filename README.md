@@ -1,3 +1,153 @@
+# Bare-Metal STM32F4 Cortex-M4 Round-Robin Scheduler (v2)
+
+A custom, bare-metal preemptive round-robin task scheduler built for ARM Cortex-M4 (STM32F4) microcontrollers. The system uses the Cortex-M SysTick timer to perform context switching across multiple independent tasks.
+
+---
+
+## Architecture Overview
+
+The system manages 5 statically allocated threads executing in a round-robin cycle:
+
+- **Target MCU**: STM32F4 Series (100 MHz System Clock via HSE & PLL)
+- **Scheduler Core**: Preemptive Round-Robin via `SysTick_Handler`
+- **Time Slice**: 10 ms per thread (SysTick running at 100 Hz)
+- **Context Preservation**: Hardware auto-stacking combined with manual software register saving (`R4–R11`)
+
+
+
+## Detailed Architectural Upgrades
+
+### 1. Pure Assembly Context Switcher
+
+#### Version 1 (Hybrid Approach)
+In `v1`, `SysTick_Handler` pushed software registers (`r4-r11`) in assembly, then performed a branch link (`bl context_switch`) to call a C function. 
+
+* **Drawback**: Calling a C function inside an interrupt handler forces the compiler to insert procedure call overhead, altering stack offsets and risking register corruption.
+
+#### Version 2 (Pure Assembly)
+In `v2`, the C function `context_switch` was completely eliminated. The MSP pointer read/write (`mrs`/`msr`), task index arithmetic (`add`, `cmp`, `it eq`), and array indexing (`lsl #2`) are handled entirely in assembly within `SysTick_Handler`.
+
+---
+
+### 2. Stack Synthesis & Elimination of Magic Offsets
+
+#### Version 1 (Manual Stack Frame)
+`v1` only pushed `xPSR` and `PC` in `fake_stack()`. To account for the rest of the un-pushed registers (`r0–r3`, `r12`, `LR`, `r4–r11`), `main()` manually assigned the stack pointer using a hardcoded index:
+- `exc_add[i] = (uint32_t)&arr1[44];` (Manually offset by 16 words / 64 bytes).
+
+#### Version 2 (Automated Frame Construction)
+`v2` expanded `fake_stack()` to push a complete fake context frame:
+1. Hardware Frame: `xPSR`, `PC`, `LR`, `R12`, `R3`, `R2`, `R1`, `R0`
+2. Software Frame: `R11`, `R10`, `R9`, `R8`, `R7`, `R6`, `R5`, `R4`
+
+The initial stack address is then saved automatically using `__get_MSP()`, completely removing the need for hardcoded index math.
+
+---
+
+### 3. SysTick Priority Management (`SCB->SHP`)
+
+In **Version 2**, the following line was added to `v2main.c`:
+
+```c
+SCB->SHP[11] = 0xFF; // Set SysTick priority to lowest level (0xFF)
+```
+
+- **Why this matters**: In Cortex-M RTOS design, the scheduler interrupt (SysTick / PendSV) **must** run at the lowest priority so that hardware interrupts (such as UART, SPI, or Timers) are never delayed by a context switch.
+
+---
+
+### 4. Telemetry and I/O Expansion
+
+- **Version 1**: The application only blinked an LED via bit-banding (`blinken` vs `blinkoff`).
+- **Version 2**: Integrated USART1 serial communication. Each of the 5 threads transmits its status over serial (`b0\r\n`, `g0\r\n`, `r0\r\n`, `y0\r\n`, `w0\r\n`), providing real-time visibility into scheduler behavior.
+
+
+### Thread Specifications
+
+| Thread ID | Entry Function | Memory Stack | Action |
+| :--- | :--- | :--- | :--- |
+| **0** | `blue()` | `mem_alloc[0]` | Controls LED on PC13 and sends UART message |
+| **1** | `green()` | `mem_alloc[1]` | Sends UART message |
+| **2** | `red()` | `mem_alloc[2]` | Sends UART message |
+| **3** | `yellow()` | `mem_alloc[3]` | Sends UART message |
+| **4** | `white()` | `mem_alloc[4]` | Sets LED alias state and sends UART message |
+
+---
+
+## Architecture Diagrams
+
+### 1. Context Switch Stack Layout
+
+When a context switch occurs, the ARM hardware automatically pushes 8 core registers. The SysTick handler then manually pushes 8 additional software registers onto the active stack.
+
+```mermaid
+classDiagram
+    class StackMemory {
+        +0x1C : xPSR (Hardware Auto-Saved)
+        +0x18 : PC / Task Entry Address (Hardware Auto-Saved)
+        +0x14 : LR / Link Register (Hardware Auto-Saved)
+        +0x10 : R12 (Hardware Auto-Saved)
+        +0x0C : R3 (Hardware Auto-Saved)
+        +0x08 : R2 (Hardware Auto-Saved)
+        +0x04 : R1 (Hardware Auto-Saved)
+        +0x00 : R0 (Hardware Auto-Saved)
+        ---
+        -0x04 : R11 (Software Saved)
+        -0x08 : R10 (Software Saved)
+        -0x0C : R9  (Software Saved)
+        -0x10 : R8  (Software Saved)
+        -0x14 : R7  (Software Saved)
+        -0x18 : R6  (Software Saved)
+        -0x1C : R5  (Software Saved)
+        -0x20 : R4  (Software Saved / Top of Stack)
+    }
+
+sequenceDiagram
+    autonumber
+    participant HW as Hardware / SysTick
+    participant TaskA as Active Task
+    participant Handler as SysTick_Handler
+    participant TaskB as Next Task
+
+    TaskA->>HW: Executing normal task code
+    HW->>Handler: SysTick Timer Interrupt
+    Note over TaskA, Handler: Hardware pushes xPSR, PC, LR, R12, R3-R0
+    Handler->>Handler: Save remaining registers (R4-R11)
+    Handler->>Handler: Store active SP in exc_add array
+    Handler->>Handler: Advance task index to next thread
+    Handler->>Handler: Update SP to next thread saved location
+    Handler->>Handler: Restore software registers (R4-R11)
+    Handler->>HW: Return from Exception
+    Note over Handler, TaskB: Hardware pops R0-R3, R12, LR, PC, xPSR
+    HW->>TaskB: Resume execution
+
+
+
+Project Structure
+delay.h: Global definitions, array allocations, thread count limits, and function prototypes.
+delay.c: Software busy-wait delay implementation.
+v2.c: SysTick interrupt handler and individual task routines (blue, green, red, yellow, white).
+v2main.c: System initialization, clock configuration, task stack synthesis function, and application main entry point.
+
+
+Known Bugs and Design Issues
+
+Register Corruption during Initialization: The stack setup process overwrites the register storing the task function address before saving it to the stack, leading to execution crashes.
+
+Missing Return Instructions in Naked Functions: The function synthesizing initial thread stacks is declared as naked but lacks assembly return instructions, causing memory fall-through after execution.
+
+Stack Alignment Violation: Stack pointer calculations result in 4-byte alignment rather than the mandatory 8-byte alignment required by ARM Procedure Call Standards.
+
+Shared MSP Memory Architecture: User tasks execute using the Main Stack Pointer rather than the dedicated Process Stack Pointer, mixing kernel interrupt stack memory with task execution stack memory.
+
+Inadequate Stack Memory Sizing: The allocated task stack array size is too small, creating a high risk of stack overflow when calling HAL driver functions.
+
+Hardcoded Floating Point Exception Returns: The exception return mask hardcodes execution back to standard thread mode using MSP, breaking compatibility if Floating Point hardware extensions are enabled.
+
+Interrupt Disabling during I/O Operations: Temporarily turning off global interrupts during UART transmission freezes the SysTick timer and halts real-time task switching.
+
+Uncalibrated Timing Loop: The software delay function relies on arbitrary loop counts that do not accurately represent real-time millisecond durations.
+
 ---
 
 # Minimal RTOS Kernel — Version 1.0 (Full Context Preservation)

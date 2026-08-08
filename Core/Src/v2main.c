@@ -1,56 +1,61 @@
 #include "main.h"
+#include "usart.h"
 #include "gpio.h"
 #include "delay.h"
 #include "cmsis_compiler.h"
-#include "stm32f4xx.h"
 
 int i = 1;
-
 int exc_add[mx_thread];
-int arr0[60];
-int arr1[60];
-
-void fake_stack(int *ptr);
+int mem_alloc[mx_thread][stack_size];
 
 __attribute__((naked)) void fake_stack(int *ptr)
 {
-    __set_MSP((uint32_t)&arr1[60]);
+    __disable_irq();
+    __set_MSP((uint32_t)&mem_alloc[i][stack_size - 1]);
     __asm volatile (
-        "mov r0, 0x01000000 \n"
-        "push {r0}          \n"
-        "push {%[my_ptr]}   \n"
-        "bx lr              \n"
+        "mov r0, 0x01000000  \n\t"
+        "push {r0}           \n\t"
+        "push {%[my_ptr]}    \n\t"
+        "push {r0-r3,r12,r14}\n\t"
+        "push {r4-r11}       \n\t"
         :
         : [my_ptr] "r" (ptr)
         : "r0", "memory"
     );
+    exc_add[i] = __get_MSP();
+    i = (i + 1) % mx_thread;
+    __set_MSP((uint32_t)&mem_alloc[i][stack_size - 1]);
+    __enable_irq();
 }
 
 int main(void)
 {
     HAL_Init();
     SystemClock_Config();
+
     MX_GPIO_Init();
+    MX_USART1_UART_Init();
 
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
-    (void)RCC->AHB1ENR; // Dummy read to force clock enable to take effect
+    (void)RCC->AHB1ENR;
 
-    *((volatile uint32_t *)0x40020800u) &= ~(3 << 26); // Clear GPIOC MODER13
-    *((volatile uint32_t *)0x40020800u) |= (1 << 26);  // Set GPIOC MODER13 as Output
+    *((volatile uint32_t *)0x40020800u) &= ~(3 << 26);
+    *((volatile uint32_t *)0x40020800u) |= (1 << 26);
 
     SysTick->LOAD = (SystemCoreClock / 100U) - 1U;
-    SysTick->VAL  = 0U;
-    SysTick->CTRL = 7 ;
+    SysTick->VAL = 0U;
+    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
+                    SysTick_CTRL_TICKINT_Msk   |
+                    SysTick_CTRL_ENABLE_Msk;
 
-    __disable_irq();
-    fake_stack((int *)&blinkoff);
-    exc_add[i] = (uint32_t)&arr1[44];
-i=0;
-    __set_MSP((int)&arr0[60]);
+    SCB->SHP[11] = 0xFF;
 
-    __enable_irq();
+    fake_stack((int *)&green);
+    fake_stack((int *)&red);
+    fake_stack((int *)&yellow);
+    fake_stack((int *)&white);
 
-    blinken();
+    blue();
 
     while (1) {
     }
@@ -58,7 +63,6 @@ i=0;
 
 void SystemClock_Config(void)
 {
-    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
     LL_FLASH_SetLatency(LL_FLASH_LATENCY_3);
     while (LL_FLASH_GetLatency() != LL_FLASH_LATENCY_3) {
     }
@@ -89,8 +93,7 @@ void SystemClock_Config(void)
     LL_SetSystemCoreClock(100000000);
 
     if (HAL_InitTick(TICK_INT_PRIORITY) != HAL_OK) {
-        while (1) {
-        }
+        Error_Handler();
     }
 
     LL_RCC_SetTIMPrescaler(LL_RCC_TIM_PRESCALER_TWICE);
@@ -109,3 +112,9 @@ void Error_Handler(void)
     while (1) {
     }
 }
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif

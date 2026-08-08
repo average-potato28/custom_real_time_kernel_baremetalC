@@ -106,7 +106,8 @@ __attribute__((naked)) void HardFault_Handler(void) {
 #include "usart.h"
 void hard_fault_handler_c(uint32_t *stack_pointer, uint32_t lr_val);
 
-void hard_fault_handler_c(uint32_t *stack_pointer, uint32_t lr_val) {// 1. Extract registers from the stacked hardware frame
+void hard_fault_handler_c(uint32_t *stack_pointer, uint32_t lr_val) {
+    // 1. Extract registers from the stacked hardware frame
     volatile uint32_t r0   = stack_pointer[0];
     volatile uint32_t r1   = stack_pointer[1];
     volatile uint32_t r2   = stack_pointer[2];
@@ -122,14 +123,28 @@ void hard_fault_handler_c(uint32_t *stack_pointer, uint32_t lr_val) {// 1. Extra
     volatile uint32_t mmfar = SCB->MMFAR; // MemManage Fault Address (Address that caused MemManage violation)
     volatile uint32_t bfar  = SCB->BFAR;  // Bus Fault Address (Address that caused Bus violation)
 
-    // Freeze interrupts so no other interrupt preempts the fault analysis
-    __disable_irq();
+    // 3. Optional: Transmit diagnostic information over UART (if UART is operational)
+    char buffer[128];
+    __disable_irq(); // Freeze interrupts during print
 
-    // 3. Halt execution and trigger debugger breakpoint
-    // Inspect the volatile variables above in your debugger's "Variables" view.
+    snprintf(buffer, sizeof(buffer),
+             "\r\n=== CRASH DETECTED ===\r\n"
+             "PC   : 0x%08LX\r\nLR   : 0x%08LX\r\nxPSR : 0x%08LX\r\n"
+             "R0   : 0x%08LX\r\nR1   : 0x%08LX\r\nR2   : 0x%08LX\r\nR3   : 0x%08LX\r\n"
+             "R12  : 0x%08LX\r\nSP   : 0x%08LX\r\nEXC_R: 0x%08LX\r\n",
+             pc, lr, xpsr, r0, r1, r2, r3, r12, (uint32_t)stack_pointer, lr_val);
+    HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), 100);
+
+    snprintf(buffer, sizeof(buffer),
+             "CFSR : 0x%08LX\r\nHFSR : 0x%08LX\r\nBFAR : 0x%08LX\r\nMMFAR: 0x%08LX\r\n",
+             cfsr, hfsr, bfar, mmfar);
+    HAL_UART_Transmit(&huart1, (uint8_t*)buffer, strlen(buffer), 100);
+
+    // 4. Halt execution and trigger debugger breakpoint
     while (1) {
         __asm volatile ("bkpt #0"); // Automatically halts your debugger exactly here
-    }}
+    }
+}
 
 /**
   * @brief This function handles Memory management fault.
