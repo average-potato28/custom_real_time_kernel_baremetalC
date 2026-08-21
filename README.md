@@ -1,29 +1,164 @@
 
 
-# Bare-Metal STM32F4 Cortex-M4 Preemptive Scheduler Engine
+# Bare-Metal STM32F4 Cortex-M4 RTOS Engine
 
-A custom, bare-metal preemptive round-robin task scheduler designed for ARM Cortex-M4 (STM32F4) microcontrollers. This repository documents the step-by-step evolutionary development of the kernel across three major versions—from a proof-of-concept hardware exception switcher (v0) to a full 5-thread assembly context-switching engine (v2).
+A custom, bare-metal preemptive real-time operating system (RTOS) kernel developed from the ground up for ARM Cortex-M4 (STM32F4) microcontrollers. This repository documents the complete evolutionary journey of the operating system across four major architectural iterations.
 
 ---
 
 ## Table of Contents
 
-- [Version 2 — Multi-Thread Assembly Kernel (Current)](#version-2--multi-thread-assembly-kernel-current)
+- [Version 3 — Priority-Based Preemptive RTOS (Current Release)](#version-3--priority-based-preemptive-rtos-current-release)
   - [Architecture Overview](#architecture-overview)
   - [Thread Specifications](#thread-specifications)
-  - [Detailed Architectural Upgrades over V1](#detailed-architectural-upgrades-over-v1)
+  - [Detailed Architectural Upgrades over V2](#detailed-architectural-upgrades-over-v2)
   - [Architecture Diagrams](#architecture-diagrams)
   - [Project File Structure](#project-file-structure)
-  - [Known Bugs & Design Issues](#known-bugs--design-issues)
+  - [Known Bugs & Design Limitations](#known-bugs--design-limitations)
+- [Version 2 — Multi-Thread Assembly Kernel](#version-2--multi-thread-assembly-kernel)
 - [Version 1.0 — Minimal RTOS Kernel](#version-10--minimal-rtos-kernel-full-context-preservation)
-  - [How It Works](#how-it-works)
-  - [Architecture Diagram](#architecture-diagram)
-  - [Features](#features)
-  - [Bugs & Architectural Issues](#bugs--architectural-issues-targets-for-version-2)
 - [Version 0 — Proof of Concept](#version-0--minimal-rtos-kernel-proof-of-concept)
-  - [How It Works](#how-it-works-1)
-  - [Architecture](#architecture)
-  - [The 5 Biggest Bugs & Architectural Problems](#the-5-biggest-bugs--architectural-problems)
+
+---
+
+# Version 3 — Priority-Based Preemptive RTOS (Current Release)
+
+Version 3 transitions the project into a true RTOS kernel featuring formal Thread Control Blocks (TCBs), separation of kernel and user stacks using the Process Stack Pointer (PSP), asynchronous context switching via PendSV, hardware-accelerated priority bitmask scheduling, non-blocking timed delays, and an energy-saving idle thread.
+
+## Architecture Overview
+
+- **Target MCU**: STM32F4 Series (100 MHz System Clock via HSE & PLL)
+- **Kernel Architecture**: Priority-driven preemptive multitasking with cooperative yielding
+- **Stack Separation**: **MSP** for ISRs / Kernel exceptions; **PSP** for individual User Tasks
+- **Context Switch Mechanism**: Asynchronous **PendSV** exception (`0xFFFFFFFD` return)
+- **Task Bootstrap**: Supervisor Call (`SVC 0`) handler for cold-launching the first task
+- **Time Management**: 10 ms tick rate via SysTick managing dynamic non-blocking sleep timers
+- **Scheduling Algorithm**: Hardware-accelerated bitmask search using `__builtin_ctz` ($O(1)$ priority selection)
+- **Power Optimization**: Dedicated lowest-priority Idle Thread executing `WFI` (Wait For Interrupt)
+
+---
+
+## Thread Specifications
+
+Version 3 supports up to 6 statically allocated tasks (5 worker threads + 1 system idle thread). Task priority is determined by bit position (Bit 0 = Highest Priority, Bit 5 = Lowest Priority):
+
+| Priority / ID | Entry Function | Memory Stack | Non-Blocking Delay | Role & Peripheral Action |
+| :---: | :--- | :--- | :---: | :--- |
+| **0 (Highest)** | `blue()` | `Array[0].mem_alloc` | 50 ticks (500 ms) | Acquires UART lock & transmits `b0\r\n` |
+| **1** | `green()` | `Array[1].mem_alloc` | 30 ticks (300 ms) | Acquires UART lock & transmits `g0\r\n` |
+| **2** | `red()` | `Array[2].mem_alloc` | 10 ticks (100 ms) | Acquires UART lock & transmits `r0\r\n` |
+| **3** | `yellow()` | `Array[3].mem_alloc` | 20 ticks (200 ms) | Acquires UART lock, sets PC13, transmits `y0\r\n` |
+| **4** | `white()` | `Array[4].mem_alloc` | 40 ticks (400 ms) | Acquires UART lock, resets PC13, transmits `w0\r\n` |
+| **5 (Lowest)** | `idle_thread()` | `Array[5].mem_alloc` | None | Background loop executing low-power `WFI` |
+
+---
+
+## Detailed Architectural Upgrades over V2
+
+### 1. Dual Stack Pointer Architecture (MSP vs. PSP)
+* **Version 2 Problem**: All threads ran directly on the Main Stack Pointer (MSP), mixing interrupt stack frames with task execution stacks and creating severe stack corruption hazards.
+* **Version 3 Upgrade**: Tasks execute exclusively on the **Process Stack Pointer (PSP)**. The kernel and all interrupt service routines execute on the **Main Stack Pointer (MSP)**.
+
+### 2. Decoupled PendSV Context Switching
+* **Version 2 Problem**: Context switching was executed synchronously inside `SysTick_Handler`, forcing registers to be swapped immediately even if high-priority ISRs were pending.
+* **Version 3 Upgrade**: `SysTick_Handler` only manages timer countdowns and sets the PendSV interrupt flag (`SCB_ICSR_PENDSVSET_Msk`). The hardware delays the context switch until all critical interrupts finish, executing safely in `PendSV_Handler`.
+
+### 3. Formal Thread Control Block (TCB / `OS_boy`)
+* **Version 2 Problem**: Thread stack pointers and delay counters were kept in disjointed global arrays.
+* **Version 3 Upgrade**: Encapsulated task states inside an aligned struct (`OS_boy`) containing the current stack pointer (`sp`), dynamic tick countdown (`timer`), and private task stack buffer (`mem_alloc`).
+
+### 4. Hardware-Accelerated Bitmask Scheduling
+* **Version 2 Problem**: Fixed round-robin index cycling (`(i + 1) % 5`) running regardless of whether a thread had work to do.
+* **Version 3 Upgrade**: Implemented a global ready bitmask (`ready_reg`). Thread selection utilizes the Cortex-M single-cycle Count Trailing Zeros instruction (`__builtin_ctz`), achieving constant-time $O(1)$ priority-based dispatching.
+
+### 5. Supervisor Call (SVC) Cold Launch
+* **Version 2 Problem**: Main thread jumped directly to task 0 as a normal C function call before the scheduler was officially running.
+* **Version 3 Upgrade**: Cleanly initiates OS multitasking via `SVC 0`. `SVC_Handler` configures the initial PSP, pops software registers, and performs an ARM exception return (`0xFFFFFFFD`) to enter Thread mode cleanly.
+
+### 6. Non-Blocking Delays & Low-Power Idle Thread
+* **Version 2 Problem**: Tasks wasted 100% of CPU cycles executing busy-wait loops (`__NOP()`), locking out lower-priority work.
+* **Version 3 Upgrade**: Replaced busy-waiting with `rtos_delay()`. Threads clear their ready bit, record their requested sleep ticks, and yield the CPU. When all tasks sleep, the CPU falls back to `idle_thread()` which executes `wfi` to conserve power.
+
+### 7. Reliable Stack Synthesis (`pseudo_stack`)
+* **Version 2 Problem**: Inlined naked assembly in `fake_stack` frequently clobbered input registers before pushing them.
+* **Version 3 Upgrade**: Stack frames are populated directly in standard C with exact 16-word offsets, cleanly initializing both the hardware frame (`xPSR`, `PC`, `LR`, `R12`, `R0–R3`) and software frame (`R4–R11`).
+
+---
+
+## Architecture Diagrams
+
+### 1. TCB and Dual-Stack Memory Model
+
+```mermaid
+classDiagram
+    class TCB_Structure {
+        +uint32_t* sp (Offset 0x00 -> Points to top of PSP)
+        +uint32_t timer (Tick sleep countdown)
+        +uint32_t mem_alloc[80] (Dedicated task stack space)
+    }
+
+    class Active_Task_PSP_Stack {
+        +0x3C : xPSR (0x01000000 - Thumb Mode)
+        +0x38 : PC (Task Entry Point)
+        +0x34 : LR (0x00000000)
+        +0x30 : R12
+        +0x2C : R3
+        +0x28 : R2
+        +0x24 : R1
+        +0x20 : R0
+        --- Hardware Exception Boundary ---
+        +0x1C : R11
+        +0x18 : R10
+        +0x14 : R9
+        +0x10 : R8
+        +0x0C : R7
+        +0x08 : R6
+        +0x04 : R5
+        +0x00 : R4 (sp points here when suspended)
+    }
+
+    TCB_Structure --> Active_Task_PSP_Stack : sp references top of stack
+
+sequenceDiagram
+    autonumber
+    participant Task as Running Task (on PSP)
+    participant SysTick as SysTick_Handler (on MSP)
+    participant PendSV as PendSV_Handler (on MSP)
+    participant NextTask as Next Task (on PSP)
+
+    Task->>SysTick: 10ms System Tick Interrupt
+    Note over Task, SysTick: Hardware pushes R0-R3, R12, LR, PC, xPSR to PSP
+    SysTick->>SysTick: SYS_ticks() -> Decrement thread sleep timers
+    SysTick->>SysTick: SYS_prep() -> Find highest priority ready task via __builtin_ctz
+    SysTick->>SysTick: Trigger PendSV (SCB->ICSR |= PENDSVSET)
+    SysTick->>Task: Exit SysTick ISR
+    
+    Note over Task, PendSV: PendSV executes immediately after ISR exit
+    PendSV->>PendSV: STMDB: Save R4-R11 to current task PSP
+    PendSV->>PendSV: Save updated PSP into prev->sp
+    PendSV->>PendSV: Load curr->sp of next ready task
+    PendSV->>PendSV: LDMIA: Restore R4-R11 from new PSP
+    PendSV->>PendSV: MSR psp, r0 (Update Process Stack Pointer)
+    PendSV->>NextTask: BX 0xFFFFFFFD (Exception return to Thread Mode via PSP)
+    Note over PendSV, NextTask: Hardware pops R0-R3, R12, LR, PC, xPSR from PSP
+    NextTask->>NextTask: Resume execution
+
+.
+├── delay.h               # TCB (OS_boy) struct, scheduler function declarations, thread defines
+├── schedule_v3.c         # SysTick handler, PendSV switcher, rtos_delay/yield, task bodies
+└── main_schedule_v3.c    # Stack synthesis (pseudo_stack), SVC_Handler, hardware init, main()
+
+## Known Bugs & Design Limitations
+
+### Non-Atomic Spinlock Race Condition: The shared UART lock relies on a simple integer variable checked and set across multiple instructions without hardware atomic test-and-set operations, risking concurrent access collisions under preemption.
+Strict Priority Starvation: Because task scheduling strictly favors the lowest active bit, frequently waking high-priority tasks will permanently starve lower-priority tasks if CPU capacity is saturated.
+
+### Spinlock Yield Priority Inversion: When a high-priority task repeatedly yields waiting for the UART lock, it immediately resumes execution if it remains the highest-priority ready thread, causing a tight spin loop that delays the lock-holding lower-priority task.
+Unchecked Floating Point Hardware State: The exception return value is fixed to standard thread mode on PSP without dynamically detecting extended floating-point context frames if the hardware FPU is active.
+
+### Critical Section Interrupt Masking: Scheduler synchronization functions use global interrupt disable and enable calls rather than base-priority masking, introducing minor interrupt latency to external hardware peripherals.
+
+
 
 ---
 

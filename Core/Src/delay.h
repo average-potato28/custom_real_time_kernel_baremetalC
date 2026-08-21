@@ -4,25 +4,43 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define mx_thread   5
-#define stack_size  80
+#define GPIO_C         *((volatile uint32_t*) 0x40020818u)
+#define LED_PC13_ALIAS *((volatile uint32_t*) 0x424102B4u)
 
-#define GPIO_C             (*((volatile uint32_t *)0x40020818u))
-#define LED_PC13_ALIAS     (*((volatile uint32_t *)0x424102B4u))
+#define mx_thread  6
+#define stack_size 80
 
-extern int i;
-extern int exc_add[mx_thread];
-extern int mem_alloc[mx_thread][stack_size];
+typedef struct {
+    uint32_t *sp;
+    uint32_t timer;
+    uint32_t mem_alloc[stack_size];
+} OS_boy;
+
+extern OS_boy Array[mx_thread];
+extern OS_boy *arr[mx_thread];
+extern OS_boy *curr;
+extern OS_boy *prev;
+extern volatile uint32_t SYS_i;
+extern volatile uint32_t ready_reg[(mx_thread + 31) / 32];
 
 void SystemClock_Config(void);
-void delay(int ms);
-void SysTick_Handler(void);
-void fake_stack(int *ptr);
+void delay(int itr);
 
+void white(void);
 void blue(void);
 void green(void);
-void red(void);
 void yellow(void);
-void white(void);
+void red(void);
+void idle_thread(void);
 
-#endif /* __DELAY_H__ */
+void SysTick_Handler(void);
+void PendSV_Handler(void);
+void SVC_Handler(void);
+
+void pseudo_stack(int *ptr);
+void SYS_ticks(void);
+void SYS_prep(void);
+void rtos_delay(uint32_t ticks);
+void rtos_yield(void);
+
+#endif // __DELAY_H__
