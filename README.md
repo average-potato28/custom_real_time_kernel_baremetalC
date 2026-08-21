@@ -83,7 +83,7 @@ Version 3 supports up to 6 statically allocated tasks (5 worker threads + 1 syst
 * **Version 2 Problem**: Inlined naked assembly in `fake_stack` frequently clobbered input registers before pushing them.
 * **Version 3 Upgrade**: Stack frames are populated directly in standard C with exact 16-word offsets, cleanly initializing both the hardware frame (`xPSR`, `PC`, `LR`, `R12`, `R0–R3`) and software frame (`R4–R11`).
 
----
+# RTOS Scheduler — Architecture & Known Issues
 
 ## Architecture Diagrams
 
@@ -96,7 +96,6 @@ classDiagram
         +uint32_t timer (Tick sleep countdown)
         +uint32_t mem_alloc[80] (Dedicated task stack space)
     }
-
     class Active_Task_PSP_Stack {
         +0x3C : xPSR (0x01000000 - Thumb Mode)
         +0x38 : PC (Task Entry Point)
@@ -116,23 +115,25 @@ classDiagram
         +0x04 : R5
         +0x00 : R4 (sp points here when suspended)
     }
-
     TCB_Structure --> Active_Task_PSP_Stack : sp references top of stack
+```
 
+### 2. Context Switch Sequence (SysTick → PendSV)
+
+```mermaid
 sequenceDiagram
     autonumber
     participant Task as Running Task (on PSP)
     participant SysTick as SysTick_Handler (on MSP)
     participant PendSV as PendSV_Handler (on MSP)
     participant NextTask as Next Task (on PSP)
-
     Task->>SysTick: 10ms System Tick Interrupt
     Note over Task, SysTick: Hardware pushes R0-R3, R12, LR, PC, xPSR to PSP
     SysTick->>SysTick: SYS_ticks() -> Decrement thread sleep timers
     SysTick->>SysTick: SYS_prep() -> Find highest priority ready task via __builtin_ctz
     SysTick->>SysTick: Trigger PendSV (SCB->ICSR |= PENDSVSET)
     SysTick->>Task: Exit SysTick ISR
-    
+
     Note over Task, PendSV: PendSV executes immediately after ISR exit
     PendSV->>PendSV: STMDB: Save R4-R11 to current task PSP
     PendSV->>PendSV: Save updated PSP into prev->sp
@@ -142,27 +143,26 @@ sequenceDiagram
     PendSV->>NextTask: BX 0xFFFFFFFD (Exception return to Thread Mode via PSP)
     Note over PendSV, NextTask: Hardware pops R0-R3, R12, LR, PC, xPSR from PSP
     NextTask->>NextTask: Resume execution
+```
 
+## Project Structure
+
+```
 .
 ├── delay.h               # TCB (OS_boy) struct, scheduler function declarations, thread defines
 ├── schedule_v3.c         # SysTick handler, PendSV switcher, rtos_delay/yield, task bodies
 └── main_schedule_v3.c    # Stack synthesis (pseudo_stack), SVC_Handler, hardware init, main()
+```
 
 ## Known Bugs & Design Limitations
 
-### Non-Atomic Spinlock Race Condition: The shared UART lock relies on a simple integer variable checked and set across multiple instructions without hardware atomic test-and-set operations, risking concurrent access collisions under preemption.
-Strict Priority Starvation: Because task scheduling strictly favors the lowest active bit, frequently waking high-priority tasks will permanently starve lower-priority tasks if CPU capacity is saturated.
+- **Non-Atomic Spinlock Race Condition** — The shared UART lock relies on a simple integer variable checked and set across multiple instructions without hardware atomic test-and-set operations, risking concurrent access collisions under preemption.
+- **Strict Priority Starvation** — Because task scheduling strictly favors the lowest active bit, frequently waking high-priority tasks will permanently starve lower-priority tasks if CPU capacity is saturated.
+- **Spinlock Yield Priority Inversion** — When a high-priority task repeatedly yields waiting for the UART lock, it immediately resumes execution if it remains the highest-priority ready thread, causing a tight spin loop that delays the lock-holding lower-priority task.
+- **Unchecked Floating Point Hardware State** — The exception return value is fixed to standard thread mode on PSP without dynamically detecting extended floating-point context frames if the hardware FPU is active.
+- **Critical Section Interrupt Masking** — Scheduler synchronization functions use global interrupt disable and enable calls rather than base-priority masking, introducing minor interrupt latency to external hardware peripherals.
 
-### Spinlock Yield Priority Inversion: When a high-priority task repeatedly yields waiting for the UART lock, it immediately resumes execution if it remains the highest-priority ready thread, causing a tight spin loop that delays the lock-holding lower-priority task.
-Unchecked Floating Point Hardware State: The exception return value is fixed to standard thread mode on PSP without dynamically detecting extended floating-point context frames if the hardware FPU is active.
-
-### Critical Section Interrupt Masking: Scheduler synchronization functions use global interrupt disable and enable calls rather than base-priority masking, introducing minor interrupt latency to external hardware peripherals.
-
-
-
----
-
-# Version 2 — Multi-Thread Assembly Kernel (Current)
+# Version 2 — Multi-Thread Assembly Kernel 
 
 Version 2 is a custom, bare-metal preemptive round-robin task scheduler built for ARM Cortex-M4 (STM32F4) microcontrollers. The system uses the Cortex-M SysTick timer to perform context switching across multiple independent tasks.
 
