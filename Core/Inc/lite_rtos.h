@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include "lite_rtos_config.h"
 
+#define mx_thread (MAX_THREADS + 1)
+
 #define GPIO_C         *((volatile uint32_t*) 0x40020818u)
 #define LED_PC13_ALIAS *((volatile uint32_t*) 0x424102B4u)
 
@@ -34,10 +36,10 @@ void SysTick_Handler(void);
 void PendSV_Handler(void);
 void SVC_Handler(void);
 
-void pseudo_stack(int *ptr);
+int create_thread(void (*task_func)(void), uint32_t priority);
 void SYS_ticks(void);
 void SYS_prep(void);
 void rtos_delay(uint32_t ticks);
 void rtos_yield(void);
 
-#endif // __LITE_RTOS_H__
+#endif
