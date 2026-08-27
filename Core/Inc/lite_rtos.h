@@ -8,6 +8,7 @@
 typedef struct OS_boy OS_boy;
 
 int create_thread(void (*task_func)(void), uint32_t priority);
+void rtos_start(void);
 void rtos_delay(uint32_t ticks);
 void rtos_yield(void);
 
