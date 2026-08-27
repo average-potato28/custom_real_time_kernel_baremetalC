@@ -3,19 +3,30 @@
 #include "stm32f4xx.h"
 #include "lite_rtos.h"
 
-OS_boy Array[mx_thread] __attribute__((aligned(8)));
-OS_boy *arr[mx_thread];
+#define mx_thread (MAX_THREADS + 1)
+
+struct OS_boy {
+    uint32_t *sp;
+    uint32_t timer;
+    uint32_t mem_alloc[stack_size];
+};
+
+static OS_boy Array[mx_thread] __attribute__((aligned(8)));
+static OS_boy *arr[mx_thread];
 OS_boy *curr = NULL;
 OS_boy *prev = NULL;
-volatile uint32_t SYS_i = 0;
-volatile uint32_t ready_reg[(mx_thread + 31) / 32] = {0};
+static volatile uint32_t SYS_i = 0;
+static volatile uint32_t ready_reg[(mx_thread + 31) / 32] = {0};
+
+static void SYS_ticks(void);
+static void SYS_prep(void);
 
 void SysTick_Handler(void) {
     SYS_ticks();
     SYS_prep();
 }
 
-void SYS_ticks(void) {
+static void SYS_ticks(void) {
     for (int t_i = 0; t_i < (mx_thread - 1); t_i++) {
         if (arr[t_i]->timer > 0) {
             arr[t_i]->timer--;
@@ -26,7 +37,7 @@ void SYS_ticks(void) {
     }
 }
 
-void SYS_prep(void) {
+static void SYS_prep(void) {
     int curr_i = SYS_i;
     prev = arr[SYS_i];
 
