@@ -1,58 +1,77 @@
 #include "main.h"
 #include "usart.h"
 #include "gpio.h"
-#include "delay.h"
+#include "lite_rtos.h"
 #include "cmsis_compiler.h"
 #include <stdint.h>
 #include "stm32f4xx.h"
 
-void pseudo_stack(int *ptr) {
-    int i = 1;
+#define GPIO_C *((volatile uint32_t*) 0x40020818u)
 
-    // Hardware Exception Frame
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0x01000000;    // xPSR
-    arr[SYS_i]->mem_alloc[stack_size - i++] = (uint32_t)ptr; // PC
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // LR
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R12
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R3
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R2
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R1
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R0
+volatile int uart_lock = 0;
 
-    // Software Saved Frame
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R11
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R10
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R9
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R8
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R7
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R6
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R5
-    arr[SYS_i]->mem_alloc[stack_size - i++] = 0;             // R4
+void SystemClock_Config(void);
 
-    arr[SYS_i]->sp = &arr[SYS_i]->mem_alloc[stack_size - 16];
-    arr[SYS_i]->timer = 0;
-    ready_reg[SYS_i >> 5] |= (1UL << (SYS_i & 31));
-
-    SYS_i = (SYS_i + 1) % mx_thread;
-}
-
-void idle_thread(void) {
+void blue(void) {
     while (1) {
-        __asm volatile ("wfi");
+        while (uart_lock == 1) {
+            rtos_yield();
+        }
+        uart_lock = 1;
+        HAL_UART_Transmit(&huart1, (uint8_t*)"b0\r\n", 4, 10);
+        uart_lock = 0;
+        rtos_delay(50);
     }
 }
 
-__attribute__((naked)) void SVC_Handler(void) {
-    __asm volatile (
-        "ldr r1, =curr          \n"
-        "ldr r1, [r1]           \n"
-        "ldr r0, [r1]           \n"
-        "ldmia r0!, {r4-r11}    \n"
-        "msr psp, r0            \n"
-        "ldr lr, =0xFFFFFFFD    \n"
-        "bx lr                  \n"
-        ::: "memory"
-    );
+void green(void) {
+    while (1) {
+        while (uart_lock == 1) {
+            rtos_yield();
+        }
+        uart_lock = 1;
+        HAL_UART_Transmit(&huart1, (uint8_t*)"g0\r\n", 4, 10);
+        uart_lock = 0;
+        rtos_delay(30);
+    }
+}
+
+void red(void) {
+    while (1) {
+        while (uart_lock == 1) {
+            rtos_yield();
+        }
+        uart_lock = 1;
+        HAL_UART_Transmit(&huart1, (uint8_t*)"r0\r\n", 4, 8);
+        uart_lock = 0;
+        rtos_delay(10);
+    }
+}
+
+void yellow(void) {
+    while (1) {
+        while (uart_lock == 1) {
+            rtos_yield();
+        }
+        uart_lock = 1;
+        HAL_UART_Transmit(&huart1, (uint8_t*)"y0\r\n", 4, 8);
+        GPIO_C = (1ul << 13);
+        uart_lock = 0;
+        rtos_delay(20);
+    }
+}
+
+void white(void) {
+    while (1) {
+        while (uart_lock == 1) {
+            rtos_yield();
+        }
+        uart_lock = 1;
+        HAL_UART_Transmit(&huart1, (uint8_t*)"w0\r\n", 4, 8);
+        GPIO_C = (1ul << 29);
+        uart_lock = 0;
+        rtos_delay(40);
+    }
 }
 
 int main(void) {
@@ -61,38 +80,18 @@ int main(void) {
     MX_GPIO_Init();
     MX_USART1_UART_Init();
 
-    for (int idx = 0; idx < mx_thread; idx++) {
-        arr[idx] = &Array[idx];
-    }
-    SYS_i = 0;
-
-    pseudo_stack((int*)&blue);
-    pseudo_stack((int*)&green);
-    pseudo_stack((int*)&red);
-    pseudo_stack((int*)&yellow);
-    pseudo_stack((int*)&white);
-    pseudo_stack((int*)&idle_thread);
-
-    SYS_i = 0;
-    curr = arr[SYS_i];
-    prev = NULL;
-
-    SysTick->LOAD = (SystemCoreClock / 100U) - 1U;
-    SysTick->VAL = 0U;
-    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk |
-                    SysTick_CTRL_TICKINT_Msk   |
-                    SysTick_CTRL_ENABLE_Msk;
-
-    HAL_NVIC_SetPriority(SysTick_IRQn, 15, 0);
-    HAL_NVIC_SetPriority(PendSV_IRQn, 15, 0);
-
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
     (void)RCC->AHB1ENR;
     *((volatile uint32_t*) 0x40020800u) &= ~(3 << 26);
     *((volatile uint32_t*) 0x40020800u) |= (1 << 26);
 
-    __enable_irq();
-    __asm volatile ("svc 0");
+    create_thread(blue, 0);
+    create_thread(green, 1);
+    create_thread(red, 2);
+    create_thread(yellow, 3);
+    create_thread(white, 4);
+
+    rtos_start();
 
     while (1) {
     }

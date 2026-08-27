@@ -31,7 +31,6 @@
 #include <sys/times.h>
 #include <stdint.h>
 #include "stm32f4xx.h"
-#include "delay.h"
 #include "usart.h"
 
 #include "main.h"
